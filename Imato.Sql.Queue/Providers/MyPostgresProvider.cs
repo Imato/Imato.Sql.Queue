@@ -70,7 +70,8 @@ update {0} a
   from tmp_actions t
   where t.action = a.action
     and t.id != a.id
-    and a.isDone = false;
+    and a.isDone = false
+    and a.isStarted = false;
 
 select id, action, actionType, priority from tmp_actions order by id;";
 

@@ -80,7 +80,8 @@ update a
     join @actions t
       on t.action = a.action
       and t.id != a.id
-      and a.isDone = 0;
+      and a.isDone = 0
+  where a.isStarted = 0;
 
 select id, action, actionType, priority from @actions order by id;";
 
