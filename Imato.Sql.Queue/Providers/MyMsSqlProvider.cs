@@ -5,6 +5,8 @@ namespace Imato.Sql.Queue
 {
     internal class MyMsSqlProvider : MsSqlProvider, IMyProvider
     {
+        private static string[] columns = ["action", "actionGroup", "actionType", "dt", "priority", "timeOut", "source"];
+
         public MyMsSqlProvider(string? connectionString = null) : base(connectionString)
         {
         }
@@ -32,7 +34,8 @@ begin
         [source]         VARCHAR (255)   NULL,
         [isStarted]      BIT             CONSTRAINT [ActionQueue_isStarted_DF] DEFAULT ((0)) NOT NULL,
         [actionGroup]    VARCHAR (25)    NULL,
-        [priority]       INT             NULL
+        [priority]       INT             NULL,
+        [timeOut]        INT             NULL,
         CONSTRAINT [ActionQueue_PK] PRIMARY KEY CLUSTERED ([id] ASC)
     );
 
@@ -59,10 +62,10 @@ select @started = count(1)
     and q.processDt > dateadd(minute, -10, getdate());
 
 declare @actions table
-	(id int, action nvarchar(4000), actionType varchar(10), priority int);
+	(id int, action nvarchar(4000), actionType varchar(10), priority int, timeOut int);
 
 insert into @actions
-select top (@count) max(q.id) id, q.action, q.actionType, q.priority
+select top (@count) max(q.id) id, q.action, q.actionType, q.priority, isnull(max(q.timeOut), 0) timeOut
   from {0} q
   where q.isStarted = 0
     and q.isDone = 0
@@ -83,7 +86,7 @@ update a
       and a.isDone = 0
   where a.isStarted = 0;
 
-select id, action, actionType, priority from @actions order by id;";
+select id, action, actionType, priority, timeOut from @actions order by id;";
 
             using var c = CreateConnection();
             return await c.QueryAsync<ActionQueue>(
@@ -94,13 +97,19 @@ select id, action, actionType, priority from @actions order by id;";
         public async Task<int> AddActionAsync(ActionQueue action)
         {
             const string sql =
-@"insert into {0} (action, dt, actionType, source, actionGroup, priority)
- values (@action, @dt, @actionType, @source, @actionGroup, @priority)
+@"insert into {0} (action, dt, actionType, source, actionGroup, priority, timeOut)
+ values (@action, @dt, @actionType, @source, @actionGroup, @priority, @timeOut)
 select @@IDENTITY;";
 
             using var c = CreateConnection();
             return await c.QuerySingleAsync<int>(sql: string.Format(sql, TableName),
                     param: action);
+        }
+
+        public async Task AddActionsAsync(ActionQueue[] actions)
+        {
+            using var c = CreateConnection();
+            await c.BulkInsertAsync(actions, TableName, columns, skipFieldsCheck: false);
         }
 
         public async Task ClearStartedActionAsync()
@@ -139,6 +148,20 @@ select @@IDENTITY;";
     where id = @id;";
             using var c = CreateConnection();
             await c.ExecuteAsync(sql: string.Format(sql, TableName), action);
+        }
+
+        public async Task CancelActionAsync(int actionId)
+        {
+            const string sql =
+@"update {0}
+    set duration = datediff(millisecond, processDt, getdate()),
+        error = 'Cancel ended action after timeout',
+        isDone = 1,
+        isStarted = 0
+    where id = @actionId
+        and isDone = 0";
+            using var c = CreateConnection();
+            await c.ExecuteAsync(sql: string.Format(sql, TableName), new { actionId });
         }
 
         public async Task ClearOldAsync()

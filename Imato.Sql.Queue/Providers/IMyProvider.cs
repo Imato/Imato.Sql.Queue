@@ -10,6 +10,8 @@ namespace Imato.Sql.Queue
 
         Task<int> AddActionAsync(ActionQueue action);
 
+        Task AddActionsAsync(ActionQueue[] actions);
+
         Task ClearStartedActionAsync();
 
         Task StartActionAsync(ActionQueue action);
@@ -17,6 +19,8 @@ namespace Imato.Sql.Queue
         string TableName { get; }
 
         Task EndActionAsync(ActionQueue action);
+
+        Task CancelActionAsync(int actionId);
 
         Task ClearOldAsync();
 

@@ -13,8 +13,9 @@ namespace Imato.Sql.Queue
         private readonly IMyProvider _dbPovider;
         private readonly QueueSettings _settings;
         private readonly ILogger<ActionQueueService> _logger;
-        private readonly List<Task> _actions = new();
+        private readonly Dictionary<ActionQueue, Task> _actions = new();
         private static byte _byte = 1;
+        private DateTime _cancelDate;
 
         public ActionQueueService(IActionQueueRepository repository,
             QueueSettings settings,
@@ -64,7 +65,6 @@ namespace Imato.Sql.Queue
                     }
 
                     isDone = true;
-                    action.Error = string.Empty;
                     action.AttemptCount = (byte)(_settings.MaxAttemptCount + _byte);
                 }
                 catch (Exception e)
@@ -155,6 +155,22 @@ namespace Imato.Sql.Queue
             return _dbPovider.AddActionAsync(action);
         }
 
+        public async Task AddActionsAsync(ActionQueue[] actions)
+        {
+            if (actions == null || actions.Length == 0) return;
+
+            _logger?.LogDebug(() => "Add new actions {0} count", [actions.Length]);
+
+            if (actions.Length == 1)
+            {
+                await AddActionAsync(actions[0]);
+            }
+            else
+            {
+                await _dbPovider.AddActionsAsync(actions);
+            }
+        }
+
         public Task<ActionQueue?> GetActionAsync(int id)
         {
             return _dbPovider.GetActionAsync(id);
@@ -179,21 +195,31 @@ namespace Imato.Sql.Queue
             foreach (var action in newActions)
             {
                 var task = new Task(async () =>
-                {
-                    var a = action;
-                    await StartActionAsync(a);
-                },
+                    {
+                        var a = action;
+                        await StartActionAsync(a);
+                    },
                     token);
-                _actions.Add(task);
+                _actions.TryRemove(action)?.Dispose();
+                _actions.Add(action, task);
                 task.Start();
                 Thread.Sleep(10);
             }
 
+            await CancelOldAsync();
+        }
+
+        public async Task CancelOldAsync()
+        {
+            var now = DateTime.Now;
             foreach (var action in _actions
-                                    .Where(x => x.Status == TaskStatus.WaitingForActivation)
-                                    .ToArray())
+                   .Where(x => (x.Key.TimeOut > 0 && x.Key.Dt < now.AddMilliseconds(-1 * x.Key.TimeOut.Value)))
+                   // || x.Value.IsCompleted )
+                   .Select(x => x.Key)
+                   .ToArray())
             {
-                _actions.Remove(action);
+                _actions.TryRemove(action)?.Dispose();
+                await _dbPovider.CancelActionAsync(action.Id);
             }
         }
     }

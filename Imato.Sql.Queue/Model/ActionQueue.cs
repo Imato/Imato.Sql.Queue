@@ -14,9 +14,20 @@
         public byte AttemptCount { get; set; }
         public string? ActionGroup { get; set; }
         public int Priority { get; set; }
+        public int? TimeOut { get; set; }
 
         public const string ActionTypeSql = "sql";
 
         public const string ActionTypeNet = ".net";
+
+        public override bool Equals(object? obj)
+        {
+            return (obj as ActionQueue)?.Id == Id;
+        }
+
+        public override int GetHashCode()
+        {
+            return Id + 432921122;
+        }
     }
 }

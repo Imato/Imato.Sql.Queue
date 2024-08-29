@@ -4,6 +4,8 @@
     {
         Task<int> AddActionAsync(ActionQueue action);
 
+        Task AddActionsAsync(ActionQueue[] actions);
+
         Task ClearOldAsync();
 
         Task ClearStartedActionAsync();
