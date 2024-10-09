@@ -7,8 +7,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Imato.Dapper.DbContext" Version="1.11.0" />
+    <PackageReference Include="Imato.Dapper.DbContext" Version="1.11.2" />
     <PackageReference Include="Imato.Logger.Extensions" Version="1.2.1" />
+    <PackageReference Include="Imato.Try" Version="1.1.1" />
   </ItemGroup>
 
 	<PropertyGroup>
@@ -24,7 +25,7 @@
 		<PackageTags>Queue SQL</PackageTags>
 		<PackageLicenseExpression>MIT</PackageLicenseExpression>
 		<PackageReleaseNotes>Ready to use</PackageReleaseNotes>
-		<Version>1.1.0</Version>
+		<Version>1.1.1</Version>
 		<AssemblyName>Imato.Sql.Queue</AssemblyName>
 		<PackageIcon>icon.png</PackageIcon>
 		<PublishRepositoryUrl>true</PublishRepositoryUrl>

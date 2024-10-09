@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using Imato.Logger.Extensions;
+using Imato.Try;
 using System.Diagnostics;
 using Dapper;
 
@@ -46,7 +47,7 @@ namespace Imato.Sql.Queue
                 try
                 {
                     action.AttemptCount++;
-                    await _dbPovider.StartActionAsync(action);
+                    await TryAsync(() => _dbPovider.StartActionAsync(action));
 
                     switch (action.ActionType)
                     {
@@ -80,15 +81,7 @@ namespace Imato.Sql.Queue
                 action.IsDone = isDone || action.AttemptCount >= _settings.MaxAttemptCount;
                 action.Duration = watch.ElapsedMilliseconds;
 
-                try
-                {
-                    await _dbPovider.EndActionAsync(action);
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogError(ex, () => "EndActionAsync");
-                }
-                await WaitAsync(action);
+                await TryAsync(() => _dbPovider.EndActionAsync(action));
             }
         }
 
@@ -99,17 +92,17 @@ namespace Imato.Sql.Queue
 
             var parameters = Strings.ParseParameters(action.Action);
             var command = action.Action;
+            var timeOut = (action?.TimeOut ?? 600_000) / 1_000;
 
             using (var connection = _repository.Connection(connectionString))
             {
-                if (int.TryParse(parameters.GetValue("timeOut"), out int timeOut))
+                if (int.TryParse(parameters.GetValue("timeOut"), out int t))
                 {
+                    timeOut = t;
                     command = command.Replace($", @timeOut = {timeOut}", "", StringComparison.InvariantCultureIgnoreCase);
-                    await connection.ExecuteAsync(sql: command, commandTimeout: timeOut);
-                    return;
                 }
 
-                await connection.ExecuteAsync(sql: command, commandTimeout: 600);
+                await connection.ExecuteAsync(sql: command, commandTimeout: timeOut);
             }
         }
 
@@ -221,6 +214,20 @@ namespace Imato.Sql.Queue
                 _actions.TryRemove(action)?.Dispose();
                 await _dbPovider.CancelActionAsync(action.Id);
             }
+        }
+
+        private async Task TryAsync(Func<Task> func)
+        {
+            await Try.Try.Function(func)
+                .Setup(new TryOptions
+                {
+                    Delay = 200,
+                    ErrorOnFail = true,
+                    RetryCount = 3,
+                    Timeout = 30_000
+                })
+                .OnError((ex) => _logger?.LogError(ex, () => "Execution error"))
+                .ExecuteAsync();
         }
     }
 }
