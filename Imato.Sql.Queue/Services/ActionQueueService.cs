@@ -38,16 +38,19 @@ namespace Imato.Sql.Queue
         {
             _logger?.LogDebug(() => "Try start action {0}", [action]);
             var watch = new Stopwatch();
+            var isDone = false;
             watch.Start();
 
-            while (action.AttemptCount <= _settings.MaxAttemptCount)
-            {
-                var isDone = false;
+            action.IsStarted = true;
+            action.IsDone = false;
+            action.ProcessDt = DateTime.Now;
+            await TryAsync(() => _dbPovider.UpdateAsync(action));
 
+            while (action.AttemptCount <= _settings.RetryActionCount)
+            {
                 try
                 {
                     action.AttemptCount++;
-                    await TryAsync(() => _dbPovider.StartActionAsync(action));
 
                     switch (action.ActionType)
                     {
@@ -60,29 +63,34 @@ namespace Imato.Sql.Queue
                             break;
 
                         default:
-                            action.AttemptCount = _settings.MaxAttemptCount;
+                            action.AttemptCount = _settings.RetryActionCount;
                             action.Error = $"Unknown action type {action.ActionType}";
                             break;
                     }
 
                     isDone = true;
-                    action.AttemptCount = (byte)(_settings.MaxAttemptCount + _byte);
+                    action.AttemptCount = (byte)(_settings.RetryActionCount + _byte);
                 }
                 catch (Exception e)
                 {
-                    if (action.AttemptCount >= _settings.MaxAttemptCount)
+                    if (action.AttemptCount >= _settings.RetryActionCount)
                     {
-                        action.Error = e.ToString();
-                        _logger?.LogError(() => $"Run {action.ActionType}: {action.Action} \n error: {e}");
+                        _logger?.LogError(e, $"Run {action.ActionType}: {action.Action} \n error");
                     }
+                    action.Error = e.ToString();
+                    await TryAsync(() => _dbPovider.UpdateAsync(action));
+                    if (_settings.RetryDelay.TotalMilliseconds > 0
+                        && action.AttemptCount < _settings.RetryActionCount)
+                        await Task.Delay(_settings.RetryDelay);
                 }
-
-                watch.Stop();
-                action.IsDone = isDone || action.AttemptCount >= _settings.MaxAttemptCount;
-                action.Duration = watch.ElapsedMilliseconds;
-
-                await TryAsync(() => _dbPovider.EndActionAsync(action));
             }
+
+            watch.Stop();
+            action.IsDone = isDone || action.AttemptCount >= _settings.RetryActionCount;
+            action.IsStarted = false;
+            action.Duration = watch.ElapsedMilliseconds;
+
+            await TryAsync(() => _dbPovider.UpdateAsync(action));
         }
 
         protected async Task StartSqlActionAsync(ActionQueue action)
@@ -112,7 +120,7 @@ namespace Imato.Sql.Queue
             var functionName = action.Action.Split(' ').FirstOrDefault() ?? "unknown";
             if (!_settings.Functions.ContainsKey(functionName))
             {
-                action.AttemptCount = _settings.MaxAttemptCount;
+                action.AttemptCount = _settings.RetryActionCount;
                 action.Error = ($"{functionName} is not registered in QueueSettings");
             }
             var function = _settings.Functions[functionName];
@@ -169,6 +177,11 @@ namespace Imato.Sql.Queue
             return _dbPovider.GetActionAsync(id);
         }
 
+        public Task UpdateActionAsync(ActionQueue action)
+        {
+            return _dbPovider.UpdateAsync(action);
+        }
+
         public Task CreateTableAsync()
         {
             _logger?.LogDebug(() => "Create actions table");
@@ -191,10 +204,19 @@ namespace Imato.Sql.Queue
                     {
                         var a = action;
                         await StartActionAsync(a);
+                        _actions.TryRemove(a)?.Dispose();
                     },
                     token);
-                _actions.TryRemove(action)?.Dispose();
-                _actions.Add(action, task);
+                try
+                {
+                    _actions.TryRemove(action)?.Dispose();
+                    _actions.TryAdd(action, task);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, $"Process queue error");
+                    await CancelOldAsync();
+                }
                 task.Start();
                 Thread.Sleep(10);
             }
@@ -204,16 +226,54 @@ namespace Imato.Sql.Queue
 
         public async Task CancelOldAsync()
         {
-            var now = DateTime.Now;
+            if ((DateTime.Now - _cancelDate) < TimeSpan.FromMinutes(1))
+            {
+                return;
+            }
+
+            // Stop process after timeout
             foreach (var action in _actions
-                   .Where(x => (x.Key.TimeOut > 0 && x.Key.Dt < now.AddMilliseconds(-1 * x.Key.TimeOut.Value)))
-                   // || x.Value.IsCompleted )
-                   .Select(x => x.Key)
-                   .ToArray())
+                       .Where(x => !x.Key.IsDone && x.Key.IsStarted && IsTimedOut(x.Key))
+                       // || x.Value.IsCompleted )
+                       .Select(x => x.Key)
+                       .ToArray())
+            {
+                try
+                {
+                    action.Duration = ActionDuration(action);
+                    var timeOut = action.TimeOut > 0 ? action.TimeOut.Value : _settings.DefaultExecutionTimeout.TotalMilliseconds;
+                    _actions.TryRemove(action)?.Dispose();
+                    action.IsDone = true;
+                    action.IsStarted = false;
+                    action.Error = $"{DateTime.Now:HH:mm:ss}: Cancel action after timeout: {timeOut}, duration: {action.Duration} ";
+                    await _dbPovider.UpdateAsync(action);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogError(ex, $"Cancel old queue error");
+                }
+            }
+
+            // Delete finished
+            foreach (var action in _actions
+                       .Select(x => x.Key)
+                       .Where(x => x.IsDone)
+                       .ToArray())
             {
                 _actions.TryRemove(action)?.Dispose();
-                await _dbPovider.CancelActionAsync(action.Id);
             }
+
+            _cancelDate = DateTime.Now;
+        }
+
+        private long ActionDuration(ActionQueue action)
+        {
+            return (long)(DateTime.Now - (action.ProcessDt ?? action.Dt)).TotalMilliseconds;
+        }
+
+        private bool IsTimedOut(ActionQueue action)
+        {
+            return ActionDuration(action) > (action.TimeOut > 0 ? action.TimeOut.Value : _settings.DefaultExecutionTimeout.TotalMilliseconds);
         }
 
         private async Task TryAsync(Func<Task> func)
@@ -226,7 +286,7 @@ namespace Imato.Sql.Queue
                     RetryCount = 3,
                     Timeout = 30_000
                 })
-                .OnError((ex) => _logger?.LogError(ex, () => "Execution error"))
+                .OnError((ex) => _logger?.LogError(ex, "Execution error"))
                 .ExecuteAsync();
         }
     }

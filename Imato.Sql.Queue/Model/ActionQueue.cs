@@ -7,6 +7,7 @@
         public string? Error { get; set; }
         public long Duration { get; set; }
         public DateTime Dt { get; set; } = DateTime.Now;
+        public DateTime? ProcessDt { get; set; }
         public bool IsDone { get; set; }
         public bool IsStarted { get; set; }
         public string ActionType { get; set; } = ActionTypeNet;

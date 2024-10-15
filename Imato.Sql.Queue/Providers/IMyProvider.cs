@@ -14,13 +14,9 @@ namespace Imato.Sql.Queue
 
         Task ClearStartedActionAsync();
 
-        Task StartActionAsync(ActionQueue action);
+        Task UpdateAsync(ActionQueue action);
 
         string TableName { get; }
-
-        Task EndActionAsync(ActionQueue action);
-
-        Task CancelActionAsync(int actionId);
 
         Task ClearOldAsync();
 

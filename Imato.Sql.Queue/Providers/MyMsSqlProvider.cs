@@ -62,16 +62,22 @@ select @started = count(1)
     and q.processDt > dateadd(minute, -10, getdate());
 
 declare @actions table
-	(id int, action nvarchar(4000), actionType varchar(10), priority int, timeOut int);
+	(id int,
+    action nvarchar(4000),
+    actionType varchar(10),
+    priority int,
+    timeOut int,
+    source varchar(255),
+    actionGroup varchar(25));
 
 insert into @actions
-select top (@count) max(q.id) id, q.action, q.actionType, q.priority, isnull(max(q.timeOut), 0) timeOut
+select top (@count) max(q.id) id, q.action, q.actionType, max(q.priority),
+    isnull(max(q.timeOut), 0) timeOut, max(source), max(actionGroup)
   from {0} q
   where q.isStarted = 0
     and q.isDone = 0
     and @started < @count * 2
-  group by q.action, q.actionType, q.priority
-  order by priority, id;
+  group by q.action, q.actionType;
 
 update a
     set isDone = 1,
@@ -86,7 +92,7 @@ update a
       and a.isDone = 0
   where a.isStarted = 0;
 
-select id, action, actionType, priority, timeOut from @actions order by id;";
+select * from @actions order by priority, id;";
 
             using var c = CreateConnection();
             return await c.QueryAsync<ActionQueue>(
@@ -125,26 +131,22 @@ select @@IDENTITY;";
             await c.ExecuteAsync(sql: string.Format(sql, TableName), commandTimeout: 60);
         }
 
-        public async Task StartActionAsync(ActionQueue action)
+        public async Task UpdateAsync(ActionQueue action)
         {
             const string sql =
 @"update {0}
-    set processDt = getdate(),
-        isDone = 0,
-        isStarted = 1
-    where id = @id;";
-            using var c = CreateConnection();
-            await c.ExecuteAsync(string.Format(sql, TableName), action);
-        }
-
-        public async Task EndActionAsync(ActionQueue action)
-        {
-            const string sql =
-@"update {0}
-    set duration = @duration,
+    set dt = @dt,
+        action = @action,
+        processDt = @processDt,
+        duration = @duration,
         error = @error,
         isDone = @isDone,
-        isStarted = 0
+        isStarted = @isStarted,
+        actionType = @actionType,
+        source = @source,
+        actionGroup = @actionGroup,
+        priority = @priority,
+        timeOut = @timeOut
     where id = @id;";
             using var c = CreateConnection();
             await c.ExecuteAsync(sql: string.Format(sql, TableName), action);
@@ -158,8 +160,7 @@ select @@IDENTITY;";
         error = 'Cancel ended action after timeout',
         isDone = 1,
         isStarted = 0
-    where id = @actionId
-        and isDone = 0";
+    where id = @actionId";
             using var c = CreateConnection();
             await c.ExecuteAsync(sql: string.Format(sql, TableName), new { actionId });
         }

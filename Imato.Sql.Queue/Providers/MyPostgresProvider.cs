@@ -45,12 +45,13 @@ create index if not exists actions_queue_dt_ix on actions.queue (dt);";
         {
             const string sql =
 @"create temp table if not exists tmp_actions
-	(id int, action text, actionType varchar(10), priority int, timeOut int);
+	(id int, action text, actionType varchar(10), priority int, timeOut int, source varchar(255), actionGroup varchar(255));
 
 truncate tmp_actions;
 
 insert into tmp_actions
-select max(q.id) id, q.action, q.actionType, q.priority, coalesce(max(q.timeOut), 0) timeOut
+select max(q.id) id, q.action, q.actionType, max(q.priority),
+    coalesce(max(q.timeOut), 0) timeOut, max(source), max(actionGroup)
   from {0} q
   where q.isStarted = false
     and q.isDone = false
@@ -60,9 +61,8 @@ select max(q.id) id, q.action, q.actionType, q.priority, coalesce(max(q.timeOut)
 			  where q.isStarted = true
 			    and q.isDone = false
 			    and q.processDt > now() - 10 * interval'1 minute')
-  group by q.action, q.actionType, q.priority
-  order by priority, id
- 	limit 10;
+  group by q.action, q.actionType
+  limit 10;
 
 update {0} a
   set isDone = true,
@@ -76,7 +76,7 @@ update {0} a
     and a.isDone = false
     and a.isStarted = false;
 
-select id, action, actionType, priority, timeOut from tmp_actions order by id;";
+select * from tmp_actions order by priority, id;";
 
             using var c = CreateConnection();
             return await c.QueryAsync<ActionQueue>(
@@ -115,44 +115,25 @@ returning id; ";
             await c.ExecuteAsync(sql: string.Format(sql, TableName), commandTimeout: 60);
         }
 
-        public async Task StartActionAsync(ActionQueue action)
+        public async Task UpdateAsync(ActionQueue action)
         {
             const string sql =
 @"update {0}
-    set processDt = now(),
-        isDone = false,
-        isStarted = true
-    where id = @id;";
-            using var c = CreateConnection();
-            await c.ExecuteAsync(string.Format(sql, TableName), action);
-        }
-
-        public async Task EndActionAsync(ActionQueue action)
-        {
-            const string sql =
-@"update {0}
-    set duration = @duration,
+    set dt = @dt,
+        action = @action,
+        processDt = @processDt,
+        duration = @duration,
         error = @error,
         isDone = @isDone,
-        isStarted = 0
+        isStarted = @isStarted,
+        actionType = @actionType,
+        source = @source,
+        actionGroup = @actionGroup,
+        priority = @priority,
+        timeOut = @timeOut
     where id = @id;";
-
             using var c = CreateConnection();
-            await c.ExecuteAsync(string.Format(sql, TableName), action);
-        }
-
-        public async Task CancelActionAsync(int actionId)
-        {
-            const string sql =
-@"update {0}
-    set duration = date_part('millisecond', (processDt - now())),
-        error = 'Cancel ended action after timeout',
-        isDone = true,
-        isStarted = false
-    where id = @actionId
-        and isDone = false;";
-            using var c = CreateConnection();
-            await c.ExecuteAsync(sql: string.Format(sql, TableName), new { actionId });
+            await c.ExecuteAsync(sql: string.Format(sql, TableName), action);
         }
 
         public async Task ClearOldAsync()

@@ -18,6 +18,8 @@
 
         Task<ActionQueue?> GetActionAsync(int id);
 
+        Task UpdateActionAsync(ActionQueue action);
+
         Task ProcessQueueAsync(CancellationToken token);
 
         // Add mapping fanction name - to executed function
