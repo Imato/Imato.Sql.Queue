@@ -3,6 +3,7 @@ using Imato.Logger.Extensions;
 using Imato.Try;
 using System.Diagnostics;
 using Dapper;
+using System.Collections.Concurrent;
 
 namespace Imato.Sql.Queue
 
@@ -14,7 +15,7 @@ namespace Imato.Sql.Queue
         private readonly IMyProvider _dbPovider;
         private readonly QueueSettings _settings;
         private readonly ILogger<ActionQueueService> _logger;
-        private readonly Dictionary<ActionQueue, Task> _actions = new();
+        private readonly ConcurrentDictionary<ActionQueue, Task> _actions = new();
         private static byte _byte = 1;
         private DateTime _cancelDate;
 
@@ -73,11 +74,9 @@ namespace Imato.Sql.Queue
                 }
                 catch (Exception e)
                 {
-                    if (action.AttemptCount >= _settings.RetryActionCount)
-                    {
-                        _logger?.LogError(e, $"Run {action.ActionType}: {action.Action} \n error");
-                    }
+                    _logger?.LogError(e, $"Run {action.ActionType}: {action.Action} \n error");
                     action.Error = e.ToString();
+                    action.Duration = watch.ElapsedMilliseconds;
                     await TryAsync(() => _dbPovider.UpdateAsync(action));
                     if (_settings.RetryDelay.TotalMilliseconds > 0
                         && action.AttemptCount < _settings.RetryActionCount)
@@ -86,10 +85,9 @@ namespace Imato.Sql.Queue
             }
 
             watch.Stop();
-            action.IsDone = isDone || action.AttemptCount >= _settings.RetryActionCount;
+            action.IsDone = true;
             action.IsStarted = false;
             action.Duration = watch.ElapsedMilliseconds;
-
             await TryAsync(() => _dbPovider.UpdateAsync(action));
         }
 
@@ -212,11 +210,8 @@ namespace Imato.Sql.Queue
                     _actions.TryRemove(action)?.Dispose();
                     _actions.TryAdd(action, task);
                 }
-                catch (Exception ex)
-                {
-                    _logger?.LogError(ex, $"Process queue error");
-                    await CancelOldAsync();
-                }
+                catch { }
+
                 task.Start();
                 Thread.Sleep(10);
             }
