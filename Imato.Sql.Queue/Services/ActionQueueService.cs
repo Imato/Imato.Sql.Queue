@@ -10,7 +10,7 @@ namespace Imato.Sql.Queue
 {
     public class ActionQueueService : IActionQueueService
     {
-        private DateTime _lastClear;
+        private DateTime _lastClear = DateTime.Now.AddHours(-23);
         private readonly IActionQueueRepository _repository;
         private readonly IMyProvider _dbPovider;
         private readonly QueueSettings _settings;
@@ -35,17 +35,20 @@ namespace Imato.Sql.Queue
             return _dbPovider.GetActionsAsync(_settings.Threads);
         }
 
-        public async Task StartActionAsync(ActionQueue action)
+        public async Task StartActionAsync(ActionQueue action, CancellationToken? cancellationToken = null)
         {
             _logger?.LogDebug(() => "Try start action {0}", [action]);
             var watch = new Stopwatch();
-            var isDone = false;
             watch.Start();
 
             action.IsStarted = true;
             action.IsDone = false;
             action.ProcessDt = DateTime.Now;
             await TryAsync(() => _dbPovider.UpdateAsync(action));
+
+            var timeOut = action.TimeOut > 0
+                    ? TimeSpan.FromMilliseconds(action.TimeOut.Value)
+                    : _settings.DefaultExecutionTimeout;
 
             while (action.AttemptCount <= _settings.RetryActionCount)
             {
@@ -60,7 +63,7 @@ namespace Imato.Sql.Queue
                             break;
 
                         case ActionQueue.ActionTypeNet:
-                            await StartDotNetActionAsync(action);
+                            await StartDotNetActionAsync(action, cancellationToken ?? new CancellationTokenSource(timeOut).Token);
                             break;
 
                         default:
@@ -69,7 +72,6 @@ namespace Imato.Sql.Queue
                             break;
                     }
 
-                    isDone = true;
                     action.AttemptCount = (byte)(_settings.RetryActionCount + _byte);
                 }
                 catch (Exception e)
@@ -107,12 +109,11 @@ namespace Imato.Sql.Queue
                     timeOut = t;
                     command = command.Replace($", @timeOut = {timeOut}", "", StringComparison.InvariantCultureIgnoreCase);
                 }
-
                 await connection.ExecuteAsync(sql: command, commandTimeout: timeOut);
             }
         }
 
-        protected Task StartDotNetActionAsync(ActionQueue action)
+        protected Task StartDotNetActionAsync(ActionQueue action, CancellationToken cancellationToken)
         {
             var parameters = Strings.ParseParameters(action.Action);
             var functionName = action.Action.Split(' ').FirstOrDefault() ?? "unknown";
@@ -122,7 +123,7 @@ namespace Imato.Sql.Queue
                 action.Error = ($"{functionName} is not registered in QueueSettings");
             }
             var function = _settings.Functions[functionName];
-            return function(parameters);
+            return function(parameters, cancellationToken);
         }
 
         private async Task WaitAsync(ActionQueue action)
@@ -136,10 +137,11 @@ namespace Imato.Sql.Queue
 
         public async Task ClearOldAsync()
         {
-            if ((DateTime.Now - _lastClear).TotalHours < 24) return;
+            if ((DateTime.Now - _lastClear).TotalHours < 24)
+                return;
             _lastClear = DateTime.Now;
             _logger?.LogDebug(() => "Clear old actions");
-            await _dbPovider.ClearOldAsync();
+            await _dbPovider.ClearOldAsync(_settings.ClearQueueAfterDays);
         }
 
         public async Task ClearStartedActionAsync()
@@ -186,7 +188,7 @@ namespace Imato.Sql.Queue
             return _dbPovider.CreateTableAsync();
         }
 
-        public void AddFunction(string name, Func<Dictionary<string, string>, Task> func)
+        public void AddFunction(string name, Func<Dictionary<string, string>, CancellationToken, Task> func)
         {
             _settings.Functions.Add(name, func);
         }
@@ -216,16 +218,17 @@ namespace Imato.Sql.Queue
                 Thread.Sleep(10);
             }
 
-            await CancelOldAsync();
+            await CancelOldAsync(token);
         }
 
-        public async Task CancelOldAsync()
+        public async Task CancelOldAsync(CancellationToken token)
         {
             if ((DateTime.Now - _cancelDate) < TimeSpan.FromMinutes(1))
             {
                 return;
             }
 
+            /*
             // Stop process after timeout
             foreach (var action in _actions
                        .Where(x => !x.Key.IsDone && x.Key.IsStarted && IsTimedOut(x.Key))
@@ -248,6 +251,7 @@ namespace Imato.Sql.Queue
                     _logger?.LogError(ex, $"Cancel old queue error");
                 }
             }
+            */
 
             // Delete finished
             foreach (var action in _actions

@@ -136,12 +136,11 @@ returning id; ";
             await c.ExecuteAsync(sql: string.Format(sql, TableName), action);
         }
 
-        public async Task ClearOldAsync()
+        public async Task ClearOldAsync(int clearQueueAfterDays)
         {
-            const string sql = "delete from {0} where isDone = 1 and dt < getdate() - 7;";
-
+            const string sql = "delete from {0} where isDone = 1 and dt < now() - ({1} * interval'1 day');";
             using var c = CreateConnection();
-            await c.ExecuteAsync(sql: string.Format(sql, TableName));
+            await c.ExecuteAsync(sql: string.Format(sql, TableName, clearQueueAfterDays));
         }
 
         public async Task<ActionQueue?> GetActionAsync(int id)

@@ -18,7 +18,7 @@ namespace Imato.Sql.Queue
 
         string TableName { get; }
 
-        Task ClearOldAsync();
+        Task ClearOldAsync(int clearQueueAfterDays);
 
         Task<ActionQueue?> GetActionAsync(int id);
     }

@@ -14,7 +14,7 @@
 
         Task<IEnumerable<ActionQueue>> GetNewActionsAsync();
 
-        Task StartActionAsync(ActionQueue action);
+        Task StartActionAsync(ActionQueue action, CancellationToken? cancellationToken = null);
 
         Task<ActionQueue?> GetActionAsync(int id);
 
@@ -23,6 +23,6 @@
         Task ProcessQueueAsync(CancellationToken token);
 
         // Add mapping fanction name - to executed function
-        void AddFunction(string name, Func<Dictionary<string, string>, Task> func);
+        void AddFunction(string name, Func<Dictionary<string, string>, CancellationToken, Task> func);
     }
 }
