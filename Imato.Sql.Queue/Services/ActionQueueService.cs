@@ -8,7 +8,7 @@ using System.Collections.Concurrent;
 namespace Imato.Sql.Queue
 
 {
-    public class ActionQueueService : IActionQueueService
+    public class ActionQueueService : IActionQueueService, IDisposable
     {
         private DateTime _lastClear = DateTime.Now.AddHours(-23);
         private readonly IActionQueueRepository _repository;
@@ -16,6 +16,8 @@ namespace Imato.Sql.Queue
         private readonly QueueSettings _settings;
         private readonly ILogger<ActionQueueService> _logger;
         private readonly ConcurrentDictionary<ActionQueue, Task> _actions = new();
+        private Task? _cleaningTask = null;
+        private CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
         private static byte _byte = 1;
         private DateTime _cancelDate;
 
@@ -27,6 +29,31 @@ namespace Imato.Sql.Queue
             _settings = settings;
             _dbPovider = _repository.GetProvider();
             _logger = logger;
+        }
+
+        public void StartCleaning()
+        {
+            if (_cleaningTask == null)
+            {
+                var token = _cancellationTokenSource.Token;
+                _cleaningTask = Task.Factory.StartNew(async (_) =>
+                {
+                    while (!token.IsCancellationRequested)
+                    {
+                        await CancelOldAsync(token);
+                        await ClearOldAsync();
+                        await Task.Delay(180_000);
+                    }
+                },
+                TaskCreationOptions.LongRunning,
+                token);
+            }
+        }
+
+        public void StopCleaning()
+        {
+            if (!_cancellationTokenSource.IsCancellationRequested)
+                _cancellationTokenSource.Cancel();
         }
 
         public Task<IEnumerable<ActionQueue>> GetNewActionsAsync()
@@ -126,15 +153,6 @@ namespace Imato.Sql.Queue
             return function(parameters, cancellationToken);
         }
 
-        private async Task WaitAsync(ActionQueue action)
-        {
-            if (!action.IsDone)
-            {
-                var delay = (action.Error?.Contains("BadGateway", StringComparison.InvariantCultureIgnoreCase) == true) ? 3000 : 500;
-                await Task.Delay(delay);
-            }
-        }
-
         public async Task ClearOldAsync()
         {
             if ((DateTime.Now - _lastClear).TotalHours < 24)
@@ -195,7 +213,6 @@ namespace Imato.Sql.Queue
 
         public async Task ProcessQueueAsync(CancellationToken token)
         {
-            await ClearOldAsync();
             var newActions = await GetNewActionsAsync();
 
             foreach (var action in newActions)
@@ -217,13 +234,11 @@ namespace Imato.Sql.Queue
                 task.Start();
                 Thread.Sleep(10);
             }
-
-            await CancelOldAsync(token);
         }
 
         public async Task CancelOldAsync(CancellationToken token)
         {
-            if ((DateTime.Now - _cancelDate) < TimeSpan.FromMinutes(1))
+            if ((DateTime.Now - _cancelDate) < TimeSpan.FromMinutes(10))
             {
                 return;
             }
@@ -287,6 +302,13 @@ namespace Imato.Sql.Queue
                 })
                 .OnError((ex) => _logger?.LogError(ex, "Execution error"))
                 .ExecuteAsync();
+        }
+
+        public void Dispose()
+        {
+            _cancelDate = DateTime.MinValue;
+            CancelOldAsync(CancellationToken.None).Wait();
+            _cancellationTokenSource.Cancel();
         }
     }
 }

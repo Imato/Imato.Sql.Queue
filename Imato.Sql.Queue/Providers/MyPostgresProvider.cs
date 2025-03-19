@@ -76,6 +76,15 @@ update {0} a
     and a.isDone = false
     and a.isStarted = false;
 
+delete
+	from tmp_actions a
+	where exists
+		(select top 1 1
+			from {0} e
+			where e.isStarted = 1
+				and e.isDone = 0
+				and e.action = a.action);
+
 select * from tmp_actions order by priority, id;";
 
             using var c = CreateConnection();
@@ -138,9 +147,10 @@ returning id; ";
 
         public async Task ClearOldAsync(int clearQueueAfterDays)
         {
-            const string sql = "delete from {0} where isDone = 1 and dt < now() - ({1} * interval'1 day');";
+            const string sql = "delete from {0} where isDone = true and dt < now() - ({1} * interval'1 day');";
             using var c = CreateConnection();
-            await c.ExecuteAsync(sql: string.Format(sql, TableName, clearQueueAfterDays));
+            await c.ExecuteAsync(sql: string.Format(sql, TableName, clearQueueAfterDays),
+                commandTimeout: 180);
         }
 
         public async Task<ActionQueue?> GetActionAsync(int id)

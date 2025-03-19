@@ -21,6 +21,8 @@
 
         public const string ActionTypeNet = ".net";
 
+        public static int DefaultPriority(DateTime date) => (int)(date - DateTime.UnixEpoch).TotalMinutes;
+
         public override bool Equals(object? obj)
         {
             return (obj as ActionQueue)?.Id == Id;

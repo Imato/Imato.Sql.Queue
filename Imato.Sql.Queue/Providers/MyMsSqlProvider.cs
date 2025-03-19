@@ -92,6 +92,15 @@ update a
       and a.isDone = 0
   where a.isStarted = 0;
 
+delete a
+	from @actions a
+	where exists
+		(select top 1 1
+			from {0} e
+			where e.isStarted = 1
+				and e.isDone = 0
+				and e.action = a.action);
+
 select * from @actions order by priority, id;";
 
             using var c = CreateConnection();
@@ -169,7 +178,8 @@ select @@IDENTITY;";
         {
             const string sql = "delete from {0} where isDone = 1 and dt < getdate() - {1};";
             using var c = CreateConnection();
-            await c.ExecuteAsync(sql: string.Format(sql, TableName, clearQueueAfterDays));
+            await c.ExecuteAsync(sql: string.Format(sql, TableName, clearQueueAfterDays),
+                commandTimeout: 180);
         }
 
         public async Task<ActionQueue?> GetActionAsync(int id)

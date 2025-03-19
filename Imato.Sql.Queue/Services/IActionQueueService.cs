@@ -2,6 +2,10 @@
 {
     public interface IActionQueueService
     {
+        void StartCleaning();
+
+        void StopCleaning();
+
         Task<int> AddActionAsync(ActionQueue action);
 
         Task AddActionsAsync(ActionQueue[] actions);
